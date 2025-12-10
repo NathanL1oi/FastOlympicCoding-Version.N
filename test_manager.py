@@ -51,6 +51,7 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 		self.delta_input = 0
 		self.tester = None
 		self.session = None
+		self.out_region_set = False
 		self.phantoms = PhantomSet(view, 'test-phantoms')
 		self.test_phantoms = [PhantomSet(view, 'test-phantoms-' + str(i)) for i in range(10)]
 
@@ -114,6 +115,8 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 
 		def get_nice_runtime(self):
 			runtime = self.runtime
+			if type(runtime) == str:
+				return runtime
 			if runtime < 5000:
 				return '&nbsp;' * (2 - len(str(self.runtime))) + str(runtime) + 'ms'
 			else:
@@ -419,22 +422,20 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 		
 		# 标准化输入
 		inp = tester.tests[i].test_string
-		inp = inp.replace('\r\n', '\n').replace('\t', '    ')
 		
 		# 标准化输出
-		out = tester.prog_out[i]
-		out = out.replace('\r\n', '\n').replace('\t', '    ').rstrip()
+		out = tester.prog_out[i].rstrip()
 		
 		# 标准化错误输出
 		err = ""
 		if i < len(tester.prog_err) and tester.prog_err[i]:
-			err = tester.prog_err[i].replace('\r\n', '\n').replace('\t', '    ').rstrip()
+			err = tester.prog_err[i].rstrip()
 
 		# 标准化标准答案
 		expected = ""
 		if tester.tests[i].correct_answers:
 			raw_ans = list(tester.tests[i].correct_answers)[0]
-			expected = raw_ans.replace('\r\n', '\n').replace('\t', '    ').rstrip()
+			expected = raw_ans.rstrip()
 			
 		# 拼接
 		content = inp + '\n' + out
@@ -582,10 +583,10 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 		for j in range(i):
 			running = tester.proc_run and j == tester.running_test
 
-			if running:
+			if running or not tester.tests[j].fold:
 				# 运行时保持原样
-				pt += len(tester.tests[j].test_string) + len(tester.prog_out[j]) + 1 
-			elif not tester.tests[j].fold:
+			# 	pt += len(tester.tests[j].test_string) + len(tester.prog_out[j]) + 1 
+			# elif not tester.tests[j].fold:
 				# 展开状态：使用标准化长度
 				pt += len(self._get_display_content(j))
 			else:
@@ -780,8 +781,8 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 		
 		# 获取完整内容
 		display_text = self._get_display_content(test_id)
-		if tester.running_new:
-			display_text += '\n\n'
+		# if tester.running_new:
+		display_text += '\n\n'
 
 		# 状态判断
 		has_err = False
@@ -795,16 +796,51 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 
 		v.erase_regions('type')
 		line = v.line(self.input_start)
-		input_end = v.line(Region(self.delta_input)).end()
+		input_end = v.line(Region(self.delta_input)).end() + 2
+		
+		# old_len = 0
+		# if not self.tester.tests[test_id].fold:
+		# 	old_len = len(self._get_display_content(test_id))
 
+		# if is_correct and not has_err:
+		# 	# --- 情况 A：答案正确 -> 折叠 ---
+		# 	v.run_command('test_manager', {
+		# 		'action': 'replace',
+		# 		'region': (self.input_start, input_end),
+		# 		'text': '' 
+		# 	})
+		# 	self.tester.tests[test_id].fold = True
+		# 	new_len = 0
+		# else:
+		# 	# --- 情况 B：答案错误 -> 展开 ---
+		# 	v.run_command('test_manager', {
+		# 		'action': 'replace',
+		# 		'region': (self.input_start, input_end),
+		# 		'text': display_text
+		# 	})
+		# 	self.tester.tests[test_id].fold = False
+		# 	v.add_regions(self.REGION_BEGIN_KEY % test_id, \
+		# 		[Region(line.begin(), line.end())], *self.REGION_BEGIN_PROP)
+
+		# 	self._apply_custom_regions(test_id, self.input_start)
+			
+		# 	new_len = len(display_text)
+
+		# delta = new_len - old_len
+		
+		# if delta != 0:
+		# 	for j in range(test_id + 1, len(self.tester.tests)):
+		# 		self.tester.tests[j].tie_pos += delta
+		
 		# 渲染逻辑
-		if tester.running_new and is_correct and not has_err:
+		if is_correct and not has_err:
 			# 折叠
 			v.run_command('test_manager', {
 				'action': 'replace',
 				'region': (self.input_start, input_end),
 				'text': '' 
 			})
+			self.tester.tests[test_id].fold = True
 		else:
 			# 展开
 			v.run_command('test_manager', {
@@ -823,16 +859,17 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 		rtcode = str(rtcode)
 
 		# 结束标记
-		inp_str = self.tester.tests[test_id].test_string.replace('\r\n', '\n').replace('\t', '    ')
-		end_marker_pos = self.input_start + len(inp_str) + 1
+		inp_str = self.tester.tests[test_id].test_string
+		end_marker_pos = self.input_start + len(inp_str)
 		
-		v.add_regions('test_end_%d' % test_id, \
-			[Region(end_marker_pos, end_marker_pos)], \
-				*self.REGION_END_PROP)
+		if not self.tester.tests[test_id].fold:
+			
+			v.add_regions('test_end_%d' % test_id, \
+				[Region(end_marker_pos, end_marker_pos)], \
+					*self.REGION_END_PROP)
 
 		v.run_command('test_manager', {'action': 'set_cursor_to_end'})
 
-		# 后续逻辑保持不变...
 		tester = self.tester
 		self.memorize_tests()
 		if str(rtcode) == '0':
@@ -967,7 +1004,8 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 				code_view.run_command('save')
 
 	def make_opd(self, edit, run_file=None, build_sys=None, clr_tests=False, \
-		sync_out=False, code_view_id=None, use_debugger=False, load_session=False):
+		sync_out=False, code_view_id=None, use_debugger=False, load_session=False, \
+		auto_run=True): # [修改] 增加 auto_run 参数，默认为 True
 
 		self.use_debugger = use_debugger
 		v = self.view
@@ -987,7 +1025,8 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 				'code_view_id': code_view_id,
 				'use_debugger': use_debugger,
 				'load_session': load_session,
-				'action': 'make_opd'
+				'action': 'make_opd',
+				'auto_run': auto_run # [修改] 传递参数
 			}
 
 			def rerun(kwargs=kwargs):
@@ -1047,6 +1086,56 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 				f.write('[]')
 			tests = []
 		file_ext = path.splitext(run_file)[1][1:]
+
+		# [新增] 如果 auto_run 为 False，只初始化不编译运行
+		if not auto_run:
+			process_manager = ProcessManager(
+				run_file,
+				build_sys,
+				run_settings=get_settings().get('run_settings')
+			)
+			self.tester = self.Tester(process_manager, \
+				self.on_insert, self.on_out, self.on_stop, self.change_process_status, \
+				tests=tests, sync_out=sync_out)
+			
+			self.tester.prog_out = [''] * len(tests)
+			self.tester.prog_err = [''] * len(tests)
+			self.tester.test_iter = len(tests)
+			
+			v.settings().set('edit_mode', False)
+			self.change_process_status('READY')
+			
+			# 从 1 开始，留出 index 0 给第一个标题栏
+			self.delta_input = 1
+			
+			for i in range(len(tests)):
+				# 设置当前正在“运行”的测试点 ID
+				self.tester.running_test = i
+				# 标记为新测试，让 on_stop 自动添加 \n\n 间隔
+				self.tester.running_new = True 
+				# 默认展开
+				self.tester.tests[i].fold = False
+				
+				# 设置 on_stop 渲染所需的起始位置
+				self.input_start = self.delta_input
+				
+				# 记录锚点位置 (用于 next_test/fold 计算)
+				self.tester.tests[i].set_tie_pos(self.input_start - 1)
+				
+				# [核心] 直接调用 on_stop 渲染数据！
+				# 传入 rtcode=0 (正常), runtime='-' (未运行)
+				self.on_stop(0, '-')
+				
+				# on_stop 渲染完后，更新 delta_input 到文末，供下一次循环使用
+				self.delta_input = v.size()
+
+			v.sel().clear()
+			v.sel().add(Region(0))
+			v.show(0)
+			
+			# 最后更新一次 Phantom 按钮位置
+			self.update_configs()
+			return
 
 		self.change_process_status('COMPILING')
 
@@ -1351,11 +1440,12 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 
 	def run(self, edit, action=None, run_file=None, build_sys=None, text=None, clr_tests=False, \
 			sync_out=False, code_view_id=None, var_name=None, use_debugger=False, pos=None, \
-			load_session=False, region=None, frame_id=None, data=None, id=None, dir=1):
+			load_session=False, region=None, frame_id=None, data=None, id=None, dir=1, \
+			auto_run=True): # [修改] 增加参数
 
 		v = self.view
-
 		v.set_read_only(False)
+
 
 		if action == 'insert_line':
 			self.insert_text(edit)
@@ -1382,7 +1472,7 @@ class TestManagerCommand(sublime_plugin.TextCommand):
 
 		elif action == 'make_opd':
 			self.make_opd(edit, run_file=run_file, build_sys=build_sys, clr_tests=clr_tests, \
-				sync_out=sync_out, code_view_id=code_view_id, use_debugger=use_debugger, load_session=load_session)
+				sync_out=sync_out, code_view_id=code_view_id, use_debugger=use_debugger, load_session=load_session, auto_run=auto_run)
 
 		elif action == 'redirect_var_value':
 			self.redirect_var_value(var_name, pos=pos)
@@ -1492,7 +1582,7 @@ class ViewTesterCommand(sublime_plugin.TextCommand):
 	have_tied_dbg = False
 	use_debugger = False
 
-	def create_opd(self, clr_tests=False, sync_out=True, use_debugger=False):
+	def create_opd(self, clr_tests=False, sync_out=True, use_debugger=False, auto_run=True):
 		'''
 		creates opd with supported language
 		'''
@@ -1553,7 +1643,8 @@ class ViewTesterCommand(sublime_plugin.TextCommand):
 			'clr_tests': clr_tests, 
 			'sync_out': sync_out, 
 			'code_view_id': v.id(), \
-			'use_debugger': use_debugger
+			'use_debugger': use_debugger,
+			'auto_run': auto_run
 		})
 	
 	def close_opds(self):
@@ -1647,7 +1738,7 @@ class ViewTesterCommand(sublime_plugin.TextCommand):
 
 
 	def run(self, edit, action=None, clr_tests=False, text=None, sync_out=True, \
-			crash_line=None, value=None, pos=None, frames=None, use_debugger=False):
+			crash_line=None, value=None, pos=None, frames=None, use_debugger=False, auto_run=True):
 		v = self.view
 		scope_name = v.scope_name(v.sel()[0].begin()).rstrip()
 		file_syntax = scope_name.split()[0]
@@ -1662,7 +1753,7 @@ class ViewTesterCommand(sublime_plugin.TextCommand):
 				})
 			else:
 				self.close_opds()
-				self.create_opd(clr_tests=clr_tests, sync_out=sync_out, use_debugger=use_debugger)
+				self.create_opd(clr_tests=clr_tests, sync_out=sync_out, use_debugger=use_debugger, auto_run=auto_run)
 		elif action == 'show_crash_line':
 			pt = v.text_point(crash_line - 1, 0)
 			v.erase_regions('crash_line')
@@ -1728,3 +1819,28 @@ class LayoutListener(sublime_plugin.EventListener):
 
 	# def on_new(self, view):
 	# 	self.move_syncer(view)
+	
+# [新增] 自动打开测试面板监听器
+class AutoOpenListener(sublime_plugin.EventListener):
+	def on_load(self, view):
+		file_name = view.file_name()
+		if not file_name:
+			return
+		
+		# 检查是否有关联的测试文件
+		try:
+			test_file = get_tests_file_path(file_name)
+			if path.exists(test_file):
+				# 检查测试文件是否为空（可选）
+				with open(test_file) as f:
+					content = f.read()
+					if not content or content.strip() == '[]':
+						return
+				
+				# 触发 view_tester 命令，且 auto_run=True
+				view.run_command('view_tester', {
+					'action': 'make_opd', 
+					'auto_run': False
+				})
+		except Exception as e:
+			pass
