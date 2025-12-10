@@ -1582,7 +1582,7 @@ class ViewTesterCommand(sublime_plugin.TextCommand):
 	have_tied_dbg = False
 	use_debugger = False
 
-	def create_opd(self, clr_tests=False, sync_out=True, use_debugger=False, auto_run=True):
+	def create_opd(self, clr_tests=False, sync_out=True, use_debugger=False, auto_run=True, keep_focus=True):
 		'''
 		creates opd with supported language
 		'''
@@ -1631,7 +1631,10 @@ class ViewTesterCommand(sublime_plugin.TextCommand):
 
 		window.set_view_index(dbg_view, 1, 0)
 		window.focus_view(v)
-		window.focus_view(dbg_view)
+		# window.focus_view(dbg_view)
+    
+		if not keep_focus:   # 只有当 keep_focus 为 False 时，才把焦点移到测试面板
+			window.focus_view(dbg_view)
 
 		dbg_view.set_syntax_file('Packages/%s/TestSyntax.tmLanguage' % base_name)
 		dbg_view.set_name(os.path.split(v.file_name())[-1] + ' -run')
@@ -1738,7 +1741,7 @@ class ViewTesterCommand(sublime_plugin.TextCommand):
 
 
 	def run(self, edit, action=None, clr_tests=False, text=None, sync_out=True, \
-			crash_line=None, value=None, pos=None, frames=None, use_debugger=False, auto_run=True):
+			crash_line=None, value=None, pos=None, frames=None, use_debugger=False, auto_run=True, keep_focus=True):
 		v = self.view
 		scope_name = v.scope_name(v.sel()[0].begin()).rstrip()
 		file_syntax = scope_name.split()[0]
@@ -1753,7 +1756,7 @@ class ViewTesterCommand(sublime_plugin.TextCommand):
 				})
 			else:
 				self.close_opds()
-				self.create_opd(clr_tests=clr_tests, sync_out=sync_out, use_debugger=use_debugger, auto_run=auto_run)
+				self.create_opd(clr_tests=clr_tests, sync_out=sync_out, use_debugger=use_debugger, auto_run=auto_run, keep_focus=keep_focus)
 		elif action == 'show_crash_line':
 			pt = v.text_point(crash_line - 1, 0)
 			v.erase_regions('crash_line')
@@ -1822,25 +1825,57 @@ class LayoutListener(sublime_plugin.EventListener):
 	
 # [新增] 自动打开测试面板监听器
 class AutoOpenListener(sublime_plugin.EventListener):
-	def on_load(self, view):
-		file_name = view.file_name()
-		if not file_name:
-			return
-		
-		# 检查是否有关联的测试文件
-		try:
-			test_file = get_tests_file_path(file_name)
-			if path.exists(test_file):
-				# 检查测试文件是否为空（可选）
-				with open(test_file) as f:
-					content = f.read()
-					if not content or content.strip() == '[]':
-						return
-				
-				# 触发 view_tester 命令，且 auto_run=True
-				view.run_command('view_tester', {
-					'action': 'make_opd', 
-					'auto_run': False
-				})
-		except Exception as e:
-			pass
+    def on_activated(self, view):
+        # 1. 基础过滤：如果没有文件名，或者不是 C++ 文件，直接退出
+        file_name = view.file_name()
+        if not file_name:
+            return
+        
+        # 这里的后缀列表可以根据你的需要调整
+        if not file_name.endswith(('.cpp', '.cc', '.cxx', '.c')): 
+            return
+
+        # 2. 异步执行：延迟 100 毫秒执行，防止阻塞和递归
+        # 这样可以让 Sublime 先完成当前的焦点切换和视图初始化
+        sublime.set_timeout(lambda: self.check_and_open(view, file_name), 100)
+
+    def check_and_open(self, view, file_name):
+        # 再次检查视图是否仍然有效（防止 100ms 内用户关闭了文件）
+        if not view.is_valid() or view.window() is None:
+            return
+
+        window = view.window()
+        
+        # 3. 计算预期的测试面板名称
+        # 逻辑必须与 ViewTesterCommand.create_opd 中的 set_name 逻辑完全一致
+        # 即: "文件名 -run"
+        base_name = os.path.split(file_name)[-1]
+        expected_run_view_name = base_name + ' -run'
+
+        # 4. 检查当前窗口是否已经存在该名称的视图
+        found = False
+        for v in window.views():
+            if v.name() == expected_run_view_name:
+                found = True
+                break
+        
+        # 如果已经存在，说明已经打开了，直接退出，不要重复运行命令！
+        if found:
+            return
+
+        # 5. 检查是否存在测试数据文件
+        try:
+            test_file = get_tests_file_path(file_name)
+            if path.exists(test_file):
+                with open(test_file) as f:
+                    content = f.read()
+                    # 如果测试文件有效，才打开面板
+                    if content and content.strip() != '[]':
+                        # 运行命令，auto_run=False 只显示不运行
+                        view.run_command('view_tester', {
+                            'action': 'make_opd', 
+                            'auto_run': False,
+                            'keep_focus': True
+                        })
+        except Exception:
+            pass
