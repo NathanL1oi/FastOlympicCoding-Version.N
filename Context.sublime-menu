@@ -1,0 +1,18 @@
+[
+    {
+        "caption": "ofc->Run tests",
+        "command": "view_tester",
+		"args": {
+			"action": "make_opd",
+			"use_debugger": false
+		},
+		"context": [
+			{
+				"operand": "source.TestSyntax",
+				"operator": "not_equal",
+				"match_all": true,
+				"key": "selector"
+			}
+		]
+    }
+]
